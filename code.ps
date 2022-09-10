@@ -1,0 +1,176 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © maryamrostami598
+
+//@version=5
+strategy("Final Fantasy V", initial_capital = 100, default_qty_type = strategy.cash,default_qty_value = 100, overlay=true, calc_on_every_tick=true,commission_type=strategy.commission.percent,commission_value=.1,slippage=0)
+
+//STRATEGY========================
+
+//Inputs
+ts_bars = input.int(9, minval=1, title="Tenkan-Sen Bars")
+ks_bars = input.int(26, minval=1, title="Kijun-Sen Bars")
+ssb_bars = input.int(52, minval=1, title="Senkou-Span B Bars")
+cs_offset = input.int(26, minval=1, title="Chikou-Span Offset")
+ss_offset = input.int(26, minval=1, title="Senkou-Span Offset")
+
+middle(len) => math.avg(ta.lowest(len), ta.highest(len))
+tenkan = middle(ts_bars)
+kijun = middle(ks_bars)
+senkouA = math.avg(tenkan, kijun)
+senkouB = middle(ssb_bars)
+
+// // Plot
+//plot(tenkan, color=color.blue, title="Tenkan-Sen")
+plot(kijun, color=color.red, title="Kijun-Sen")
+//plot(close, offset=-cs_offset+1, color=color.yellow, title="Chikou-Span")
+//sa=plot(senkouA, offset=ss_offset-1, color=color.new(color.green, 0), title="Senkou-Span A")
+// sb=plot(senkouB, offset=ss_offset-1, color=color.new(color.red, 0), title="Senkou-Span B")
+// fill(sa, sb, color = senkouA > senkouB ? color.new(color.green, 50) : color.new(color.red, 50), title="Cloud color")
+
+
+//TIME RUN RANGE=======================
+start_time= input.time(timestamp("1 Aug 2022"), title="start time", group="start strategy date")
+end_time= input.time(timestamp("1 Sep 2022"), title="end time", group="start strategy date")
+is_range_date() => time >= start_time and time <= end_time ? true : false
+
+
+//CONDITION SET POSITION======================
+ss_high = math.max(senkouA[ss_offset-1], senkouB[ss_offset-1])
+ss_low = math.min(senkouA[ss_offset-1], senkouB[ss_offset-1])
+tk_cross_bull = tenkan > kijun
+tk_cross_bear = tenkan < kijun
+cs_cross_bull = ta.mom(close, cs_offset-1) > 0
+cs_cross_bear = ta.mom(close, cs_offset-1) < 0
+price_above_kumo = close > ss_high
+price_below_kumo = close < ss_low
+
+//plot(ta.mom(close, cs_offset-1))
+
+longCondition = is_range_date() and tk_cross_bull and cs_cross_bull and price_above_kumo
+shortCondition = is_range_date() and tk_cross_bear and cs_cross_bear and price_below_kumo
+
+//var is_short = false
+//if strategy.position_size < 0
+//    is_short := true
+//if is_short == true
+//    longCondition :=false
+//if strategy.position_size > -1
+//    is_short := false
+
+//SL / TP INPUT =============================
+sl_tp_type= input.session("fix","select SL / TP type", options=["fix","atr","trailing"],group="SL / Tp management")
+
+tp_type = input.session("R/R", "TP type", options=["R/R"],group="TP Types")
+sl_type = input.session("Ichi", "SL type", options=["Ichi"],group="SL Types")
+
+sl_input=input.float(1.0,title="SL% FIX"  ,group="SL / Tp management",step=0.5 )/100
+tp_input=input.float(3.0,title="TP% FIX"  ,group="SL / Tp management",step=0.5 )/100
+rbr_input=input.float(2.0,title="R/R (if select atr type) ", group="SL / Tp management",step=1 )
+atr=ta.atr(4)
+float sl = na
+float tp = na
+
+sl_change = 0.0
+sl_change_abs = 0.0
+
+sl_perc = 0.0
+sl_perc2 = 0.0
+sl_perc2_tick=0.0
+entry_price = close
+var float last_sl = na
+var float last_tp = na
+var int last_position_bar_index = na
+var float last_position_entry_price = na
+
+//  SL/TP CALCULATION ::: FIX / ATR / TRAIILING POIT & OFFSET  ========================================================================================================================
+
+if sl_tp_type == "trailing"
+    //sl := strategy.position_avg_price + (strategy.position_size > 0  ? -atr : atr)
+    //sl_perc := ((strategy.position_avg_price - sl) * 100) / strategy.position_avg_price
+    sl_perc2 := sl_perc * 2
+    sl_perc2_tick := sl_perc2 / 100
+
+if sl_tp_type == "fix"
+    //sl := strategy.position_avg_price * ( 1 + (strategy.position_size > 0 ? -sl_input : sl_input))
+    tp := strategy.position_avg_price * (1 + (strategy.position_size > 0  ? tp_input : -tp_input))
+
+if sl_tp_type == "atr"
+    //sl := strategy.position_avg_price + (strategy.position_size > 0  ? -atr : atr)
+    tp := ((strategy.position_avg_price + (strategy.position_size > 0 ?  -sl : sl)) * rbr_input) + strategy.position_avg_price
+
+if sl_type == "Ichi"
+    sl := kijun
+    sl_change := (sl - entry_price) / entry_price
+    sl_change_abs := math.abs(sl_change)
+
+if tp_type == "R/R"
+    tp := entry_price + (longCondition ? 1 : -1 * sl_change_abs * entry_price)
+
+
+//  MONEY MANAGEMENT    ========================================================================================================================================================
+
+risk_perc = 0.01
+stop_change = (math.abs(entry_price - sl) * 100) / entry_price
+//risk_value = strategy.equity * risk_perc
+risk_value = 100 * risk_perc
+position_value = (risk_value * 100) / stop_change
+position_qty = position_value / entry_price
+
+
+//CANDLE PATTERN=================================================
+bearish_engulf= close < open[1] and open > close[1] and (close[1] >= open[1]) and  (open - close) >= ((close[1] - open[1]) * 2) and (open - close) >= atr
+bulish_engulf= close > open[1] and open < close[1] and (close[1] <= open[1]) and  (close - open) >= ((open[1] - close[1]) * 2) and (close - open) >= atr
+//plotchar(bearish_engulf, size=size.small, color=color.red, char="▾", location=location.abovebar, text="Bearish")
+//plotchar(bulish_engulf, size=size.small, color=color.green, char="▴",location=location.belowbar, text="Bulish")
+
+
+
+//SET POSITION BUY/SELL===========================================================================
+if longCondition and strategy.position_size == 0
+    last_sl := sl
+    last_tp := tp
+    strategy.entry("long", strategy.long, qty = position_qty)
+    strategy.exit("close", "long" ,stop=sl, limit=tp)
+
+if shortCondition and strategy.position_size == 0
+    last_sl := sl
+    last_tp := tp
+    strategy.entry("short", strategy.short, qty = position_qty)
+    strategy.exit("close", "short" ,stop=sl, limit=tp)
+
+// if sl_tp_type == "trailing"
+//     strategy.exit("close", "long" ,stop=sl, limit=tp, trail_points = (strategy.position_avg_price*sl_perc2_tick)/syminfo.mintick, trail_offset= (strategy.position_avg_price*(sl_perc/100))/syminfo.mintick, when = strategy.position_size > 0 )
+//     strategy.exit("close","short", stop=sl, limit=tp, trail_points = (strategy.position_avg_price*sl_perc2_tick)/syminfo.mintick, trail_offset= (strategy.position_avg_price*(sl_perc/100))/syminfo.mintick, when = strategy.position_size < 0 )
+// else
+
+//if strategy.position_size > 0
+
+
+//if strategy.position_size < 0
+
+
+//====================================================================================================
+
+// if longCondition and strategy.position_size == 0
+//     last_position_bar_index := bar_index + 1
+//     last_position_entry_price := entry_price
+//     last_sl := sl
+//     strategy.entry("long", strategy.long, qty = position_qty)
+//     strategy.exit("close", "long", stop=sl, when = longCondition, comment = "stoploss")
+
+// if shortCondition and strategy.position_size == 0
+//     last_position_bar_index := bar_index + 1
+//     last_position_entry_price := entry_price
+//     last_sl := sl
+//     strategy.entry("short", strategy.short, qty = position_qty)
+//     strategy.exit("close", "short", stop=sl, when = shortCondition, comment = "stoploss")
+
+
+//  POSITION UI     ==================================================================================================================================================================================
+
+p_ep = plot(strategy.position_avg_price, color=color.new(color.gray, 0), linewidth=1, style=plot.style_linebr)
+p_sl = plot(strategy.position_size != 0 ? last_sl : na, color=color.new(color.red, 100), linewidth=1, style=plot.style_linebr)
+p_tp = plot(strategy.position_size != 0 ? last_tp : na, color=color.new(color.green, 100), linewidth=1, style=plot.style_linebr)
+
+fill(p_tp, p_ep, color.new(#089981, 80))
+fill(p_sl, p_ep, color.new(#f23645, 80))
